@@ -1,7 +1,7 @@
 @echo off
 chcp 65001 >nul 2>&1
 echo.
-echo  QESG 설치를 시작합니다...
+echo  diding 설치를 시작합니다...
 echo.
 
 :: 관리자 권한 확인

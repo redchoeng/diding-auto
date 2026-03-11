@@ -1,5 +1,5 @@
 ﻿# ============================================================
-#  QESG Installer — 쌩 컴퓨터에서도 딸깍 한번으로 완전 자동 설치
+#  diding Installer — 쌩 컴퓨터에서도 딸깍 한번으로 완전 자동 설치
 # ============================================================
 #
 #  사용법: install.bat 더블클릭 (또는 우클릭 → 관리자 권한으로 실행)
@@ -10,7 +10,7 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 Write-Host ""
 Write-Host "  ================================" -ForegroundColor Cyan
-Write-Host "    QESG Installer" -ForegroundColor Cyan
+Write-Host "    diding Installer" -ForegroundColor Cyan
 Write-Host "    AI 업무 자동화 비서" -ForegroundColor Cyan
 Write-Host "  ================================" -ForegroundColor Cyan
 Write-Host ""
@@ -162,14 +162,14 @@ if (Get-Command qesg -ErrorAction SilentlyContinue) {
 Write-Host ""
 Write-Host "[3/5] 런처 생성 중..." -ForegroundColor Yellow
 
-$launcherPath = Join-Path $scriptDir "QESG.bat"
+$launcherPath = Join-Path $scriptDir "diding.bat"
 $launcherContent = @"
 @echo off
 cd /d "$scriptDir"
 python -m qesg.app.main
 "@
 Set-Content -Path $launcherPath -Value $launcherContent -Encoding ASCII
-Write-Host "  [OK] QESG.bat 생성" -ForegroundColor Green
+Write-Host "  [OK] diding.bat 생성" -ForegroundColor Green
 
 # ── 4. Create Desktop Shortcut ──────────────────────────────
 
@@ -177,14 +177,14 @@ Write-Host ""
 Write-Host "[4/5] 바탕화면 바로가기 생성 중..." -ForegroundColor Yellow
 
 $desktopPath = [System.Environment]::GetFolderPath("Desktop")
-$shortcutPath = Join-Path $desktopPath "QESG.lnk"
+$shortcutPath = Join-Path $desktopPath "diding.lnk"
 
 $shell = New-Object -ComObject WScript.Shell
 $shortcut = $shell.CreateShortcut($shortcutPath)
 $shortcut.TargetPath = "pythonw.exe"
 $shortcut.Arguments = "-m qesg.app.main"
 $shortcut.WorkingDirectory = $scriptDir
-$shortcut.Description = "QESG - AI 업무 자동화 비서"
+$shortcut.Description = "diding - AI 업무 자동화 비서"
 $shortcut.WindowStyle = 7  # Minimized (hide console)
 
 # Set icon
@@ -199,7 +199,7 @@ if (Test-Path $icoPath) {
 }
 
 $shortcut.Save()
-Write-Host "  [OK] 바탕화면에 'QESG' 바로가기 생성" -ForegroundColor Green
+Write-Host "  [OK] 바탕화면에 'diding' 바로가기 생성" -ForegroundColor Green
 
 # ── 5. Done ─────────────────────────────────────────────────
 
@@ -208,7 +208,7 @@ Write-Host "  ================================" -ForegroundColor Green
 Write-Host "    설치 완료!" -ForegroundColor Green
 Write-Host "  ================================" -ForegroundColor Green
 Write-Host ""
-Write-Host "  바탕화면의 'QESG' 아이콘을 더블클릭하면 앱이 실행됩니다." -ForegroundColor Cyan
+Write-Host "  바탕화면의 'diding' 아이콘을 더블클릭하면 앱이 실행됩니다." -ForegroundColor Cyan
 Write-Host ""
 Write-Host "  첫 실행 시 설정 탭에서:" -ForegroundColor Yellow
 Write-Host "    1. Google OAuth 키 입력 → 구글 로그인" -ForegroundColor White
@@ -216,7 +216,7 @@ Write-Host "    2. LLM API 키 입력 (Gemini 무료)" -ForegroundColor White
 Write-Host ""
 
 # Ask if user wants to launch now
-$launch = Read-Host "  지금 QESG를 실행할까요? (Y/n)"
+$launch = Read-Host "  지금 diding를 실행할까요? (Y/n)"
 if ($launch -ne "n" -and $launch -ne "N") {
     Write-Host "  앱을 실행합니다..." -ForegroundColor Cyan
     Start-Process "pythonw.exe" -ArgumentList "-m qesg.app.main" -WorkingDirectory $scriptDir

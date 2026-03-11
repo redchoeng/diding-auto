@@ -4,7 +4,7 @@ import subprocess
 import os
 
 # System prompt that teaches the LLM how to use qesg CLI
-SYSTEM_PROMPT = """당신은 업무 확인 비서입니다. 사용자의 요청을 처리하기 위해 qesg CLI 도구를 사용합니다.
+SYSTEM_PROMPT = """당신은 diding 업무 확인 비서입니다. 사용자의 요청을 처리하기 위해 qesg CLI 도구를 사용합니다.
 이 앱은 읽기 전용 모드입니다. 메일 발송, 일정 추가 등 쓰기 작업은 할 수 없습니다.
 
 ## 사용 가능한 도구 (읽기 전용)

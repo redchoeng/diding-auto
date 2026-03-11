@@ -1,4 +1,4 @@
-"""QESG Desktop App — Flet UI for Google Workspace automation (Toss-style design)."""
+"""diding Desktop App — Flet UI for Google Workspace automation (Toss-style design)."""
 import flet as ft
 import json
 import subprocess
@@ -173,7 +173,7 @@ def section_title(text, subtitle=None):
 # ── helpers ──────────────────────────────────────────────────────────────────
 
 def _run_qesg(cmd: str) -> dict:
-    """Run a qesg CLI command and return parsed JSON."""
+    """Run a diding CLI command and return parsed JSON."""
     try:
         env = os.environ.copy()
         npm_global = os.path.join(os.environ.get("APPDATA", ""), "npm")
@@ -193,7 +193,7 @@ def _run_qesg(cmd: str) -> dict:
 
 
 def _config_path():
-    return os.path.join(os.path.expanduser("~"), ".qesg", "app_config.json")
+    return os.path.join(os.path.expanduser("~"), ".diding", "app_config.json")
 
 
 def _load_config() -> dict:
@@ -775,6 +775,57 @@ def mail_page(page: ft.Page, llm: LLMClient):
     limit_tf = toss_input("개수", value="10", width=70)
     _current_mails = []
 
+    def ai_summary_click(e):
+        """현재 조회된 메일을 AI로 요약."""
+        if not llm.is_configured():
+            status.value = "설정 탭에서 LLM API 키를 먼저 입력하세요."
+            status.color = T.RED
+            page.update()
+            return
+        if not _current_mails:
+            status.value = "먼저 '읽지 않은 메일'을 조회하세요."
+            status.color = T.ORANGE
+            page.update()
+            return
+
+        status.value = "AI가 메일을 분석 중..."
+        status.color = T.BLUE
+        page.update()
+
+        def do_work():
+            # 메일 정보를 텍스트로 변환
+            mail_text = ""
+            for m in _current_mails[:20]:
+                mail_text += f"- From: {m.get('from', '?')} | Subject: {m.get('subject', '?')} | Date: {m.get('date', '')}\n"
+
+            prompt = (
+                f"다음 {len(_current_mails)}건의 메일을 분석해주세요:\n\n"
+                f"{mail_text}\n\n"
+                "다음 형식으로 요약해주세요:\n"
+                "1. 발신자/도메인별로 그룹핑\n"
+                "2. 각 그룹별 핵심 요건 한 줄 요약\n"
+                "3. 회신 필요 여부 표시\n"
+                "4. 긴급도/중요도 순으로 정렬"
+            )
+            response = llm.chat(prompt)
+
+            status.value = ""
+            result_view.controls.clear()
+            result_view.controls.append(ft.Container(
+                content=ft.Column([
+                    ft.Row([
+                        ft.Icon(ft.Icons.AUTO_AWESOME, size=18, color=T.BLUE),
+                        ft.Text("AI 메일 요약", size=15, weight=ft.FontWeight.W_700, color=T.TEXT),
+                    ], spacing=8),
+                    ft.Container(height=8),
+                    ft.Text(response, size=13, color=T.TEXT, selectable=True),
+                ]),
+                padding=16, bgcolor=T.BLUE_LIGHT, border_radius=12,
+            ))
+            page.update()
+
+        threading.Thread(target=do_work, daemon=True).start()
+
     def _mail_tile(icon, icon_color, title, subtitle, on_click=None):
         return ft.Container(
             content=ft.Row([
@@ -1073,6 +1124,7 @@ def mail_page(page: ft.Page, llm: LLMClient):
             ft.Row([
                 toss_btn("읽지 않은 메일", triage_click, ft.Icons.INBOX_OUTLINED),
                 limit_tf,
+                toss_btn("AI 요약", ai_summary_click, ft.Icons.AUTO_AWESOME, primary=False),
                 ft.Container(expand=True),
                 query_tf,
                 toss_btn("검색", search_click, ft.Icons.SEARCH, primary=False),
@@ -1096,83 +1148,138 @@ def calendar_page(page: ft.Page):
     result_view = ft.ListView(expand=True, spacing=8, padding=ft.padding.symmetric(horizontal=4))
     status = ft.Text("", size=T.CAPTION_SIZE, color=T.TEXT_SUB)
 
+    MILESTONE_KEYWORDS = ["납품", "제출", "인증", "마감", "심사", "검수", "보고", "발표", "미팅", "회의"]
+
+    def _event_tile(ev, is_milestone=False):
+        """일정 타일 생성. 마일스톤이면 D-Day 표시."""
+        summary = ev.get("summary", "(제목 없음)")
+        start_str = ev.get("start", "")
+        end_str = ev.get("end", "")
+        icon_color = T.ORANGE if is_milestone else T.BLUE
+        icon = ft.Icons.FLAG if is_milestone else ft.Icons.CIRCLE
+
+        # D-Day 계산
+        dday_text = ""
+        if start_str and is_milestone:
+            try:
+                from datetime import datetime, date
+                start_date = None
+                for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d", "%Y-%m-%dT%H:%M:%S%z"):
+                    try:
+                        start_date = datetime.strptime(start_str[:19], fmt[:len(start_str[:19])]).date()
+                        break
+                    except ValueError:
+                        continue
+                if not start_date:
+                    start_date = datetime.strptime(start_str[:10], "%Y-%m-%d").date()
+                delta = (start_date - date.today()).days
+                if delta == 0:
+                    dday_text = "D-Day"
+                elif delta > 0:
+                    dday_text = f"D-{delta}"
+                else:
+                    dday_text = f"D+{abs(delta)}"
+            except Exception:
+                pass
+
+        right_controls = []
+        if dday_text:
+            dday_color = T.RED if "D-Day" in dday_text or dday_text.startswith("D+") else T.ORANGE
+            right_controls.append(ft.Container(
+                content=ft.Text(dday_text, size=12, weight=ft.FontWeight.W_700, color="white"),
+                bgcolor=dday_color, border_radius=8,
+                padding=ft.padding.symmetric(horizontal=8, vertical=4),
+            ))
+
+        return ft.Container(
+            content=ft.Row([
+                ft.Container(
+                    content=ft.Icon(icon, size=14 if is_milestone else 8, color=icon_color),
+                    width=32, height=32, border_radius=8,
+                    bgcolor=ft.Colors.with_opacity(0.1, icon_color),
+                    alignment=ft.Alignment(0, 0),
+                ),
+                ft.Column([
+                    ft.Text(summary, size=14, weight=ft.FontWeight.W_500, color=T.TEXT),
+                    ft.Text(f"{start_str} ~ {end_str}" if end_str else start_str,
+                            size=12, color=T.TEXT_SUB),
+                ], spacing=2, expand=True),
+                *right_controls,
+            ], spacing=8),
+            padding=ft.padding.symmetric(horizontal=16, vertical=12),
+            bgcolor=T.CARD, border_radius=12,
+        )
+
+    def _is_milestone(summary):
+        return any(kw in summary for kw in MILESTONE_KEYWORDS)
+
+    def _render_events(events, filter_milestones=False):
+        if not events:
+            result_view.controls.append(
+                ft.Container(
+                    content=ft.Column([
+                        ft.Icon(ft.Icons.EVENT_AVAILABLE, size=48, color=T.TEXT_CAPTION),
+                        ft.Text("예정된 일정이 없습니다", size=14, color=T.TEXT_SUB),
+                    ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=8),
+                    padding=40, alignment=ft.Alignment(0, 0),
+                ))
+        elif isinstance(events, list):
+            filtered = events
+            if filter_milestones:
+                filtered = [ev for ev in events if isinstance(ev, dict) and _is_milestone(ev.get("summary", ""))]
+                if not filtered:
+                    result_view.controls.append(ft.Text(
+                        f"마일스톤 키워드({', '.join(MILESTONE_KEYWORDS[:5])}...)에 해당하는 일정이 없습니다.",
+                        size=13, color=T.TEXT_SUB))
+                    page.update()
+                    return
+
+            for ev in filtered:
+                if isinstance(ev, dict):
+                    result_view.controls.append(_event_tile(ev, _is_milestone(ev.get("summary", ""))))
+                else:
+                    result_view.controls.append(ft.Text(str(ev), size=12, color=T.TEXT_SUB))
+        else:
+            result_view.controls.append(ft.Text(str(events), size=12, color=T.TEXT_SUB))
+        page.update()
+
     def agenda_click(e):
-        status.value = "일정 조회 중..."
+        status.value = "오늘 일정 조회 중..."
         result_view.controls.clear()
         page.update()
 
         def do_work():
             data = _run_qesg("qesg schedule agenda")
             status.value = ""
-            events = data.get("events", [])
-            if not events:
-                result_view.controls.append(
-                    ft.Container(
-                        content=ft.Column([
-                            ft.Icon(ft.Icons.EVENT_AVAILABLE, size=48, color=T.TEXT_CAPTION),
-                            ft.Text("예정된 일정이 없습니다", size=14, color=T.TEXT_SUB),
-                        ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=8),
-                        padding=40, alignment=ft.Alignment(0, 0),
-                    ))
-            elif isinstance(events, list):
-                for ev in events:
-                    if isinstance(ev, dict):
-                        result_view.controls.append(ft.Container(
-                            content=ft.Row([
-                                ft.Container(
-                                    content=ft.Icon(ft.Icons.CIRCLE, size=8, color=T.BLUE),
-                                    width=32, height=32, alignment=ft.Alignment(0, 0),
-                                ),
-                                ft.Column([
-                                    ft.Text(ev.get("summary", "(제목 없음)"),
-                                            size=14, weight=ft.FontWeight.W_500, color=T.TEXT),
-                                    ft.Text(f"{ev.get('start', '')} ~ {ev.get('end', '')}",
-                                            size=12, color=T.TEXT_SUB),
-                                ], spacing=2, expand=True),
-                            ], spacing=8),
-                            padding=ft.padding.symmetric(horizontal=16, vertical=12),
-                            bgcolor=T.CARD, border_radius=12,
-                        ))
-                    else:
-                        result_view.controls.append(ft.Text(str(ev), size=12, color=T.TEXT_SUB))
-            else:
-                result_view.controls.append(ft.Text(str(events), size=12, color=T.TEXT_SUB))
-            page.update()
+            _render_events(data.get("events", []))
 
         threading.Thread(target=do_work, daemon=True).start()
 
-    title_tf = toss_input("제목", width=200)
-    date_tf = toss_input("날짜", hint_text="YYYY-MM-DD", width=150)
-    time_tf = toss_input("시간", hint_text="HH:MM", width=120)
-    add_status = ft.Text("", size=T.CAPTION_SIZE)
-
-    def add_click(e):
-        if not title_tf.value or not date_tf.value:
-            add_status.value = "제목과 날짜를 입력하세요."
-            add_status.color = T.RED
-            page.update()
-            return
-        cmd = f'qesg schedule add --title "{title_tf.value}" --date {date_tf.value}'
-        if time_tf.value:
-            cmd += f" --time {time_tf.value}"
-        cmd += " --dry-run"
-        add_status.value = "추가 중..."
-        add_status.color = T.TEXT_SUB
+    def week_click(e):
+        status.value = "이번주 일정 조회 중..."
+        result_view.controls.clear()
         page.update()
 
         def do_work():
-            data = _run_qesg(cmd)
-            if data.get("status") == "dry_run":
-                add_status.value = f"[미리보기] {title_tf.value} — {date_tf.value}"
-                add_status.color = T.ORANGE
-            else:
-                add_status.value = f"완료: {data.get('message', str(data))}"
-                add_status.color = T.GREEN
-            page.update()
+            data = _run_qesg("qesg schedule agenda --days 7")
+            status.value = ""
+            _render_events(data.get("events", []))
 
         threading.Thread(target=do_work, daemon=True).start()
 
-    days_tf = toss_input("일수", value="14", width=70)
+    def milestone_click(e):
+        status.value = "마일스톤 필터링 중..."
+        result_view.controls.clear()
+        page.update()
+
+        def do_work():
+            data = _run_qesg(f"qesg schedule agenda --days {days_tf.value}")
+            status.value = ""
+            _render_events(data.get("events", []), filter_milestones=True)
+
+        threading.Thread(target=do_work, daemon=True).start()
+
+    days_tf = toss_input("일수", value="30", width=70)
 
     def deadline_click(e):
         status.value = "데드라인 조회 중..."
@@ -1188,22 +1295,7 @@ def calendar_page(page: ft.Page):
             elif isinstance(deadlines, list):
                 for dl in deadlines:
                     if isinstance(dl, dict):
-                        result_view.controls.append(ft.Container(
-                            content=ft.Row([
-                                ft.Container(
-                                    content=ft.Icon(ft.Icons.FLAG, size=16, color=T.ORANGE),
-                                    width=32, height=32, border_radius=8,
-                                    bgcolor=ft.Colors.with_opacity(0.1, T.ORANGE),
-                                    alignment=ft.Alignment(0, 0),
-                                ),
-                                ft.Column([
-                                    ft.Text(dl.get("summary", ""), size=14, weight=ft.FontWeight.W_500, color=T.TEXT),
-                                    ft.Text(str(dl.get("start", "")), size=12, color=T.TEXT_SUB),
-                                ], spacing=2, expand=True),
-                            ], spacing=12),
-                            padding=ft.padding.symmetric(horizontal=16, vertical=12),
-                            bgcolor=T.CARD, border_radius=12,
-                        ))
+                        result_view.controls.append(_event_tile(dl, True))
             page.update()
 
         threading.Thread(target=do_work, daemon=True).start()
@@ -1213,11 +1305,16 @@ def calendar_page(page: ft.Page):
         ft.Container(height=8),
         toss_card(ft.Column([
             ft.Row([
-                toss_btn("오늘 일정", agenda_click, ft.Icons.TODAY),
+                toss_btn("오늘", agenda_click, ft.Icons.TODAY),
+                toss_btn("이번주", week_click, ft.Icons.DATE_RANGE, primary=False),
+                toss_btn("마일스톤", milestone_click, ft.Icons.FLAG_OUTLINED, primary=False),
                 ft.Container(width=8),
-                toss_btn("데드라인", deadline_click, ft.Icons.FLAG_OUTLINED, primary=False),
+                toss_btn("데드라인", deadline_click, ft.Icons.TIMER_OUTLINED, primary=False),
                 days_tf,
             ], spacing=8),
+            ft.Container(height=4),
+            ft.Text("마일스톤 키워드: 납품, 제출, 인증, 마감, 심사, 검수, 보고, 발표, 미팅, 회의",
+                    size=11, color=T.TEXT_CAPTION),
         ]), padding=16),
         ft.Container(height=4),
         status,
@@ -1313,10 +1410,58 @@ def drive_page(page: ft.Page):
             elif isinstance(files, list):
                 for f_item in files:
                     if isinstance(f_item, dict):
+                        icon, color = _file_icon(f_item.get("mimeType", ""))
                         result_view.controls.append(ft.Container(
                             content=ft.Row([
-                                ft.Icon(ft.Icons.DESCRIPTION, size=16, color=T.TEXT_SUB),
-                                ft.Text(f_item.get("name", ""), size=14, color=T.TEXT, expand=True, max_lines=1),
+                                ft.Container(
+                                    content=ft.Icon(icon, size=18, color=color),
+                                    width=36, height=36, border_radius=10,
+                                    bgcolor=ft.Colors.with_opacity(0.1, color),
+                                    alignment=ft.Alignment(0, 0),
+                                ),
+                                ft.Column([
+                                    ft.Text(f_item.get("name", ""), size=14, color=T.TEXT, max_lines=1,
+                                            weight=ft.FontWeight.W_500),
+                                    ft.Text(f_item.get("modifiedTime", "")[:10] if f_item.get("modifiedTime") else "",
+                                            size=11, color=T.TEXT_SUB),
+                                ], spacing=2, expand=True),
+                            ], spacing=12),
+                            padding=ft.padding.symmetric(horizontal=16, vertical=10),
+                            bgcolor=T.CARD, border_radius=10,
+                        ))
+            page.update()
+
+        threading.Thread(target=do_work, daemon=True).start()
+
+    def recent_click(e):
+        status.value = "최근 수정 파일 조회 중..."
+        result_view.controls.clear()
+        page.update()
+
+        def do_work():
+            data = _run_qesg("qesg doc list --sort modifiedTime --limit 20")
+            status.value = ""
+            files = data.get("files", [])
+            if not files:
+                result_view.controls.append(ft.Text("최근 수정된 파일이 없습니다.", size=13, color=T.TEXT_SUB))
+            elif isinstance(files, list):
+                for f_item in files:
+                    if isinstance(f_item, dict):
+                        icon, color = _file_icon(f_item.get("mimeType", ""))
+                        result_view.controls.append(ft.Container(
+                            content=ft.Row([
+                                ft.Container(
+                                    content=ft.Icon(icon, size=18, color=color),
+                                    width=36, height=36, border_radius=10,
+                                    bgcolor=ft.Colors.with_opacity(0.1, color),
+                                    alignment=ft.Alignment(0, 0),
+                                ),
+                                ft.Column([
+                                    ft.Text(f_item.get("name", ""), size=14, color=T.TEXT, max_lines=1,
+                                            weight=ft.FontWeight.W_500),
+                                    ft.Text(f_item.get("modifiedTime", "")[:16].replace("T", " ") if f_item.get("modifiedTime") else "",
+                                            size=11, color=T.TEXT_SUB),
+                                ], spacing=2, expand=True),
                             ], spacing=12),
                             padding=ft.padding.symmetric(horizontal=16, vertical=10),
                             bgcolor=T.CARD, border_radius=10,
@@ -1335,6 +1480,7 @@ def drive_page(page: ft.Page):
                 ft.Container(width=12),
                 type_dd,
                 toss_btn("목록", list_click, ft.Icons.LIST, primary=False),
+                toss_btn("최근 수정", recent_click, ft.Icons.HISTORY, primary=False),
             ], spacing=8),
         ]), padding=16),
         ft.Container(height=4),
@@ -1455,7 +1601,7 @@ def sheets_page(page: ft.Page):
 # ── Main App ─────────────────────────────────────────────────────────────────
 
 def main(page: ft.Page):
-    page.title = "QESG"
+    page.title = "diding"
     page.window.width = 1060
     page.window.height = 720
     page.theme_mode = ft.ThemeMode.LIGHT
@@ -1566,7 +1712,7 @@ def main(page: ft.Page):
         content=ft.Column(
             [
                 ft.Container(
-                    content=ft.Text("QESG", size=20, weight=ft.FontWeight.W_800, color=T.BLUE),
+                    content=ft.Text("diding", size=20, weight=ft.FontWeight.W_800, color=T.BLUE),
                     padding=ft.padding.only(top=20, bottom=16),
                     alignment=ft.Alignment(0, 0),
                 ),
