@@ -953,9 +953,16 @@ def mail_page(page: ft.Page, llm: LLMClient):
             threading.Thread(target=do_draft, daemon=True).start()
 
         dlg = ft.AlertDialog(
-            title=ft.Text(f"{name}에게 회신", weight=ft.FontWeight.W_700, size=16, color=T.TEXT),
+            title=ft.Text(f"{name}에게 회신 초안 (읽기 전용)", weight=ft.FontWeight.W_700, size=16, color=T.TEXT),
             content=ft.Container(
                 content=ft.Column([
+                    ft.Container(
+                        content=ft.Text("읽기 전용 모드 — 초안 참고용입니다. 실제 발송은 Gmail에서 직접 해주세요.",
+                                       size=12, color=T.ORANGE, weight=ft.FontWeight.W_500),
+                        bgcolor=ft.Colors.with_opacity(0.1, T.ORANGE),
+                        border_radius=8, padding=8,
+                    ),
+                    ft.Container(height=4),
                     ft.Text(f"관련: {subjects}", size=12, color=T.TEXT_SUB),
                     ft.Container(height=8),
                     draft_topic,
@@ -1215,14 +1222,6 @@ def calendar_page(page: ft.Page):
         ft.Container(height=4),
         status,
         result_view,
-        ft.Container(height=12),
-        toss_card(ft.Column([
-            section_title("일정 추가"),
-            ft.Container(height=12),
-            ft.Row([title_tf, date_tf, time_tf,
-                    toss_btn("추가 (미리보기)", add_click, ft.Icons.ADD)], spacing=8),
-            add_status,
-        ]), padding=16),
     ], expand=True, spacing=0)
 
 

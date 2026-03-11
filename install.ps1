@@ -187,10 +187,15 @@ $shortcut.WorkingDirectory = $scriptDir
 $shortcut.Description = "QESG - AI 업무 자동화 비서"
 $shortcut.WindowStyle = 7  # Minimized (hide console)
 
-# Try to set icon
-$pythonPath = (Get-Command python -ErrorAction SilentlyContinue).Source
-if ($pythonPath) {
-    $shortcut.IconLocation = "$pythonPath,0"
+# Set icon
+$icoPath = Join-Path $scriptDir "qesg\app\ding.ico"
+if (Test-Path $icoPath) {
+    $shortcut.IconLocation = "$icoPath,0"
+} else {
+    $pythonPath = (Get-Command python -ErrorAction SilentlyContinue).Source
+    if ($pythonPath) {
+        $shortcut.IconLocation = "$pythonPath,0"
+    }
 }
 
 $shortcut.Save()
