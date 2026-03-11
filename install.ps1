@@ -126,6 +126,39 @@ if ($needNode -or $needPython) {
     exit 1
 }
 
+# --- Git (for auto-update) ---
+if (!(Get-Command git -ErrorAction SilentlyContinue)) {
+    Write-Host "  [X] Git 미설치 — 자동 설치 시도..." -ForegroundColor Yellow
+    if ($hasWinget) {
+        Write-Host "      winget으로 Git 설치 중..." -ForegroundColor Gray
+        winget install Git.Git --accept-source-agreements --accept-package-agreements --silent 2>&1 | Out-Null
+        Refresh-Path
+        $gitPaths = @("${env:ProgramFiles}\Git\cmd", "${env:ProgramFiles(x86)}\Git\cmd")
+        foreach ($p in $gitPaths) {
+            if ((Test-Path $p) -and ($env:Path -notlike "*$p*")) {
+                $env:Path = "$p;$env:Path"
+            }
+        }
+    }
+    if (Get-Command git -ErrorAction SilentlyContinue) {
+        Write-Host "  [OK] Git $(git --version) 설치 완료!" -ForegroundColor Green
+    } else {
+        Write-Host "  [!] Git 자동 설치 실패 (자동 업데이트 비활성)" -ForegroundColor Yellow
+    }
+} else {
+    Write-Host "  [OK] Git $(git --version)" -ForegroundColor Green
+}
+
+# --- Git repo 초기화 (자동 업데이트용) ---
+if (Get-Command git -ErrorAction SilentlyContinue) {
+    $gitDir = Join-Path $scriptDir ".git"
+    if (!(Test-Path $gitDir)) {
+        Write-Host "  Git 저장소 초기화 중..." -ForegroundColor Gray
+        $null = cmd /c "cd /d `"$scriptDir`" && git init && git remote add origin https://github.com/redchoeng/diding-auto.git && git fetch origin && git reset --hard origin/main 2>&1"
+        Write-Host "  [OK] 자동 업데이트 설정 완료" -ForegroundColor Green
+    }
+}
+
 # ── 2. Install Dependencies ─────────────────────────────────
 
 Write-Host ""
