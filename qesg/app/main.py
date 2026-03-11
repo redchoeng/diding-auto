@@ -7,6 +7,7 @@ import threading
 import shutil
 
 from qesg.app.llm import LLMClient
+from qesg.core import google_auth, google_api
 
 
 # ── Auto-Update ─────────────────────────────────────────────────────────────
@@ -172,25 +173,6 @@ def section_title(text, subtitle=None):
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
-def _run_qesg(cmd: str) -> dict:
-    """Run a diding CLI command and return parsed JSON."""
-    try:
-        env = os.environ.copy()
-        npm_global = os.path.join(os.environ.get("APPDATA", ""), "npm")
-        env["PATH"] = npm_global + ";" + r"C:\Program Files\nodejs;" + env.get("PATH", "")
-
-        result = subprocess.run(
-            cmd, shell=True, capture_output=True, text=True,
-            timeout=30, encoding="utf-8", env=env,
-        )
-        output = result.stdout.strip() or result.stderr.strip()
-        try:
-            return json.loads(output)
-        except (json.JSONDecodeError, TypeError):
-            return {"raw": output}
-    except Exception as e:
-        return {"error": str(e)}
-
 
 def _config_path():
     return os.path.join(os.path.expanduser("~"), ".diding", "app_config.json")
@@ -213,71 +195,9 @@ def _save_config(cfg: dict):
 
 # ── Settings Page ────────────────────────────────────────────────────────────
 
-def _env_path():
-    """Path to .env file for Google OAuth credentials."""
-    return os.path.join(os.path.dirname(__file__), "..", "..", ".env")
-
-
-def _load_env() -> dict:
-    """Load OAuth credentials from .env file."""
-    path = _env_path()
-    result = {}
-    if os.path.exists(path):
-        with open(path, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    k, v = line.split("=", 1)
-                    result[k.strip()] = v.strip()
-    return result
-
-
-def _save_env(client_id: str, client_secret: str):
-    """Save OAuth credentials to .env file."""
-    path = _env_path()
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(f"GOOGLE_WORKSPACE_CLI_CLIENT_ID={client_id}\n")
-        f.write(f"GOOGLE_WORKSPACE_CLI_CLIENT_SECRET={client_secret}\n")
-    # Also set in current process environment
-    os.environ["GOOGLE_WORKSPACE_CLI_CLIENT_ID"] = client_id
-    os.environ["GOOGLE_WORKSPACE_CLI_CLIENT_SECRET"] = client_secret
-
-
-def _check_gws_auth() -> dict:
-    """Check gws installation and auth status."""
-    env = os.environ.copy()
-    npm_global = os.path.join(os.environ.get("APPDATA", ""), "npm")
-    env["PATH"] = npm_global + ";" + r"C:\Program Files\nodejs;" + env.get("PATH", "")
-    gws_cmd = os.path.join(npm_global, "gws.cmd")
-    if not os.path.exists(gws_cmd):
-        gws_cmd = "gws"
-
-    # Check gws installed
-    try:
-        r = subprocess.run([gws_cmd, "--version"], capture_output=True, text=True,
-                           timeout=10, env=env)
-        if r.returncode != 0:
-            return {"gws_installed": False, "authenticated": False, "user": None}
-        gws_version = r.stdout.strip()
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return {"gws_installed": False, "authenticated": False, "user": None}
-
-    # Check auth status
-    try:
-        r = subprocess.run([gws_cmd, "auth", "status", "--format", "json"],
-                           capture_output=True, text=True, timeout=10, env=env)
-        output = r.stdout.strip()
-        if "authenticated" in output.lower() or "@" in output:
-            # Try to extract user email
-            import re
-            emails = re.findall(r'[\w.+-]+@[\w-]+\.[\w.]+', output)
-            return {"gws_installed": True, "gws_version": gws_version,
-                    "authenticated": True, "user": emails[0] if emails else "authenticated"}
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        pass
-
-    return {"gws_installed": True, "gws_version": gws_version,
-            "authenticated": False, "user": None}
+def _check_auth() -> dict:
+    """Check Google authentication status via google_auth module."""
+    return google_auth.check_auth()
 
 
 def settings_page(page: ft.Page, llm: LLMClient):
@@ -285,30 +205,24 @@ def settings_page(page: ft.Page, llm: LLMClient):
 
     # ── Google Account Section ──────────────────────────────────────────────
 
-    env_data = _load_env()
-    gws_status = _check_gws_auth()
+    saved_creds = google_auth.get_oauth_credentials()
+    auth_status = _check_auth()
 
     client_id_tf = toss_input(
-        "Client ID", value=env_data.get("GOOGLE_WORKSPACE_CLI_CLIENT_ID", ""),
+        "Client ID", value=saved_creds[0],
         width=480, hint_text="xxxx.apps.googleusercontent.com",
     )
     client_secret_tf = toss_input(
-        "Client Secret", value=env_data.get("GOOGLE_WORKSPACE_CLI_CLIENT_SECRET", ""),
+        "Client Secret", value=saved_creds[1],
         password=True, can_reveal_password=True, width=480,
     )
 
     # Status indicator
     def _make_status_row(status):
-        if not status["gws_installed"]:
-            return ft.Row([
-                ft.Container(width=10, height=10, border_radius=5, bgcolor=T.RED),
-                ft.Text("gws 미설치", size=13, color=T.RED, weight=ft.FontWeight.W_500),
-                ft.Text("npm install -g @googleworkspace/cli", size=11, color=T.TEXT_SUB),
-            ], spacing=8)
-        if status["authenticated"]:
+        if status.get("authenticated"):
             return ft.Row([
                 ft.Container(width=10, height=10, border_radius=5, bgcolor=T.GREEN),
-                ft.Text("연동 완료", size=13, color=T.GREEN, weight=ft.FontWeight.W_500),
+                ft.Text("연동 완료 (읽기 전용)", size=13, color=T.GREEN, weight=ft.FontWeight.W_500),
                 ft.Text(status.get("user", ""), size=12, color=T.TEXT_SUB),
             ], spacing=8)
         return ft.Row([
@@ -317,7 +231,7 @@ def settings_page(page: ft.Page, llm: LLMClient):
             ft.Text("아래에서 로그인하세요", size=12, color=T.TEXT_SUB),
         ], spacing=8)
 
-    google_status_row = ft.Container(content=_make_status_row(gws_status))
+    google_status_row = ft.Container(content=_make_status_row(auth_status))
     google_action_status = ft.Text("", size=T.CAPTION_SIZE)
 
     def save_oauth_click(e):
@@ -328,7 +242,7 @@ def settings_page(page: ft.Page, llm: LLMClient):
             google_action_status.color = T.RED
             page.update()
             return
-        _save_env(cid, csec)
+        google_auth.save_oauth_credentials(cid, csec)
         google_action_status.value = "OAuth 키 저장 완료"
         google_action_status.color = T.GREEN
         page.update()
@@ -339,96 +253,37 @@ def settings_page(page: ft.Page, llm: LLMClient):
         page.update()
 
     def login_click(e):
-        try:
-            cid = client_id_tf.value.strip()
-            csec = client_secret_tf.value.strip()
-            if not cid or not csec:
-                _show_snack("먼저 OAuth Client ID와 Secret을 입력하고 저장하세요!")
-                google_action_status.value = "먼저 OAuth 키를 입력하고 저장하세요."
-                google_action_status.color = T.RED
-                page.update()
-                return
-
-            # Save env first
-            _save_env(cid, csec)
-
-            _show_snack("브라우저가 열립니다. 구글 계정으로 로그인하세요...", T.BLUE)
-            google_action_status.value = "브라우저가 열립니다. 구글 계정으로 로그인하세요..."
-            google_action_status.color = T.BLUE
+        cid = client_id_tf.value.strip()
+        csec = client_secret_tf.value.strip()
+        if not cid or not csec:
+            _show_snack("먼저 OAuth Client ID와 Secret을 입력하고 저장하세요!")
+            google_action_status.value = "먼저 OAuth 키를 입력하고 저장하세요."
+            google_action_status.color = T.RED
             page.update()
-        except Exception as ex:
-            _show_snack(f"로그인 시작 오류: {ex}")
             return
 
+        _show_snack("브라우저가 열립니다. 구글 계정으로 로그인하세요...", T.BLUE)
+        google_action_status.value = "브라우저가 열립니다. 구글 계정으로 로그인하세요..."
+        google_action_status.color = T.BLUE
+        page.update()
+
         def do_login():
-            import shutil
-            env = os.environ.copy()
-            npm_global = os.path.join(os.environ.get("APPDATA", ""), "npm")
-            # 가능한 모든 경로 추가
-            extra_paths = [
-                npm_global,
-                r"C:\Program Files\nodejs",
-                r"C:\Program Files (x86)\nodejs",
-                os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "Python", "Python312", "Scripts"),
-            ]
-            env["PATH"] = ";".join(extra_paths) + ";" + env.get("PATH", "")
-            env["GOOGLE_WORKSPACE_CLI_CLIENT_ID"] = cid
-            env["GOOGLE_WORKSPACE_CLI_CLIENT_SECRET"] = csec
-
-            # gws 실행파일 찾기
-            gws_cmd = None
-            # 1) npm global 폴더
-            for name in ["gws.cmd", "gws.ps1", "gws"]:
-                p = os.path.join(npm_global, name)
-                if os.path.exists(p):
-                    gws_cmd = p
-                    break
-            # 2) PATH에서 찾기
-            if not gws_cmd:
-                gws_cmd = shutil.which("gws", path=env["PATH"])
-            # 3) 최후 시도
-            if not gws_cmd:
-                gws_cmd = "gws"
-
-            try:
-                # gws auth login은 브라우저를 열어야 하므로 콘솔 창으로 실행
-                process = subprocess.Popen(
-                    [gws_cmd, "auth", "login"],
-                    env=env,
-                    creationflags=subprocess.CREATE_NEW_CONSOLE,
-                )
-                process.wait(timeout=120)
-
-                # Re-check status
-                new_status = _check_gws_auth()
-                if new_status["authenticated"]:
-                    google_action_status.value = f"로그인 성공! ({new_status.get('user', '')})"
-                    google_action_status.color = T.GREEN
-                    google_status_row.content = _make_status_row(new_status)
-                else:
-                    google_action_status.value = "로그인이 완료되지 않았습니다. 다시 시도하세요."
-                    google_action_status.color = T.RED
-            except subprocess.TimeoutExpired:
-                process.kill()
-                _show_snack("타임아웃 (2분). 다시 시도하세요.", T.ORANGE)
-                google_action_status.value = "타임아웃 (2분). 다시 시도하세요."
-                google_action_status.color = T.ORANGE
-            except FileNotFoundError:
-                msg = f"gws CLI를 찾을 수 없습니다. install.bat를 다시 실행하세요. (경로: {gws_cmd})"
-                _show_snack(msg)
-                google_action_status.value = msg
-                google_action_status.color = T.RED
-            except Exception as ex:
-                msg = f"오류: {str(ex)[:200]}"
-                _show_snack(msg)
-                google_action_status.value = msg
+            result = google_auth.login(cid, csec)
+            if result["success"]:
+                _show_snack(f"로그인 성공! ({result.get('email', '')})", T.GREEN)
+                google_action_status.value = f"로그인 성공! ({result.get('email', '')})"
+                google_action_status.color = T.GREEN
+                google_status_row.content = _make_status_row({"authenticated": True, "user": result.get("email", "")})
+            else:
+                _show_snack(f"로그인 실패: {result.get('error', '')}")
+                google_action_status.value = f"로그인 실패: {result.get('error', '')[:100]}"
                 google_action_status.color = T.RED
             page.update()
 
         threading.Thread(target=do_login, daemon=True).start()
 
     def refresh_status_click(e):
-        new_status = _check_gws_auth()
+        new_status = _check_auth()
         google_status_row.content = _make_status_row(new_status)
         google_action_status.value = "상태 새로고침 완료"
         google_action_status.color = T.BLUE
@@ -440,29 +295,13 @@ def settings_page(page: ft.Page, llm: LLMClient):
         page.update()
 
         def do_logout():
-            env = os.environ.copy()
-            npm_global = os.path.join(os.environ.get("APPDATA", ""), "npm")
-            env["PATH"] = npm_global + ";" + r"C:\Program Files\nodejs;" + env.get("PATH", "")
-            gws_cmd = os.path.join(npm_global, "gws.cmd")
-            if not os.path.exists(gws_cmd):
-                gws_cmd = "gws"
-
-            try:
-                subprocess.run(
-                    [gws_cmd, "auth", "revoke"],
-                    capture_output=True, text=True,
-                    timeout=30, encoding="utf-8", env=env,
-                )
-                new_status = _check_gws_auth()
-                if not new_status["authenticated"]:
-                    google_action_status.value = "연동 해제 완료. 다른 계정으로 다시 로그인할 수 있습니다."
-                    google_action_status.color = T.GREEN
-                    google_status_row.content = _make_status_row(new_status)
-                else:
-                    google_action_status.value = "연동 해제 실패. 수동으로 해제하세요."
-                    google_action_status.color = T.RED
-            except Exception as ex:
-                google_action_status.value = f"오류: {str(ex)[:100]}"
+            result = google_auth.logout()
+            if result["success"]:
+                google_action_status.value = "연동 해제 완료. 다른 계정으로 다시 로그인할 수 있습니다."
+                google_action_status.color = T.GREEN
+                google_status_row.content = _make_status_row({"authenticated": False})
+            else:
+                google_action_status.value = f"해제 실패: {result.get('error', '')[:100]}"
                 google_action_status.color = T.RED
             page.update()
 
@@ -471,11 +310,7 @@ def settings_page(page: ft.Page, llm: LLMClient):
     def clear_keys_click(e):
         client_id_tf.value = ""
         client_secret_tf.value = ""
-        env_path = _env_path()
-        if os.path.exists(env_path):
-            os.remove(env_path)
-        os.environ.pop("GOOGLE_WORKSPACE_CLI_CLIENT_ID", None)
-        os.environ.pop("GOOGLE_WORKSPACE_CLI_CLIENT_SECRET", None)
+        google_auth.logout()
         google_action_status.value = "OAuth 키 삭제 완료"
         google_action_status.color = T.GREEN
         page.update()
@@ -855,9 +690,9 @@ def mail_page(page: ft.Page, llm: LLMClient):
         page.update()
 
         def do_work():
-            data = _run_qesg(f"qesg mail triage --limit {limit_tf.value}")
+            data = google_api.gmail_triage(int(limit_tf.value or 10))
             status.value = ""
-            if data.get("error") or data.get("code"):
+            if data.get("error"):
                 result_view.controls.append(
                     ft.Text(f"오류: {data.get('message', data.get('error', str(data)))}",
                             color=T.RED, size=13))
@@ -929,7 +764,7 @@ def mail_page(page: ft.Page, llm: LLMClient):
         page.update()
 
         def do_work():
-            data = _run_qesg(f'qesg mail chat --with "{name}"')
+            data = google_api.gmail_chat_history(name)
             status.value = ""
             threads = data.get("threads", [])
             if not threads:
@@ -1037,7 +872,7 @@ def mail_page(page: ft.Page, llm: LLMClient):
         page.update()
 
         def do_work():
-            data = _run_qesg(f'qesg mail read {mail_id}')
+            data = google_api.gmail_read(mail_id)
             status.value = ""
 
             body_text = data.get("body", data.get("raw", str(data)))
@@ -1095,7 +930,7 @@ def mail_page(page: ft.Page, llm: LLMClient):
         page.update()
 
         def do_work():
-            data = _run_qesg(f'qesg mail list --query "{query_tf.value}"')
+            data = google_api.gmail_search(query_tf.value)
             status.value = ""
             messages = data.get("messages", [])
             if not messages:
@@ -1249,7 +1084,7 @@ def calendar_page(page: ft.Page):
         page.update()
 
         def do_work():
-            data = _run_qesg("qesg schedule agenda")
+            data = google_api.calendar_agenda(1)
             status.value = ""
             _render_events(data.get("events", []))
 
@@ -1261,7 +1096,7 @@ def calendar_page(page: ft.Page):
         page.update()
 
         def do_work():
-            data = _run_qesg("qesg schedule agenda --days 7")
+            data = google_api.calendar_agenda(7)
             status.value = ""
             _render_events(data.get("events", []))
 
@@ -1273,7 +1108,7 @@ def calendar_page(page: ft.Page):
         page.update()
 
         def do_work():
-            data = _run_qesg(f"qesg schedule agenda --days {days_tf.value}")
+            data = google_api.calendar_agenda(int(days_tf.value or 30))
             status.value = ""
             _render_events(data.get("events", []), filter_milestones=True)
 
@@ -1287,15 +1122,15 @@ def calendar_page(page: ft.Page):
         page.update()
 
         def do_work():
-            data = _run_qesg(f"qesg schedule deadlines --days {days_tf.value}")
+            data = google_api.calendar_agenda(int(days_tf.value or 30))
             status.value = ""
-            deadlines = data.get("deadlines", [])
+            events = data.get("events", [])
+            deadlines = [ev for ev in events if isinstance(ev, dict) and _is_milestone(ev.get("summary", ""))]
             if not deadlines:
                 result_view.controls.append(ft.Text("다가오는 데드라인이 없습니다.", size=13, color=T.TEXT_SUB))
-            elif isinstance(deadlines, list):
+            else:
                 for dl in deadlines:
-                    if isinstance(dl, dict):
-                        result_view.controls.append(_event_tile(dl, True))
+                    result_view.controls.append(_event_tile(dl, True))
             page.update()
 
         threading.Thread(target=do_work, daemon=True).start()
@@ -1346,7 +1181,7 @@ def drive_page(page: ft.Page):
         page.update()
 
         def do_work():
-            data = _run_qesg(f'qesg doc search "{query_tf.value}"')
+            data = google_api.drive_search(query_tf.value)
             status.value = ""
             files = data.get("files", [])
             if not files:
@@ -1399,10 +1234,7 @@ def drive_page(page: ft.Page):
         page.update()
 
         def do_work():
-            cmd = f"qesg doc list --type {type_dd.value}"
-            if query_tf.value.strip():
-                cmd += f' --query "{query_tf.value}"'
-            data = _run_qesg(cmd)
+            data = google_api.drive_list(type_dd.value)
             status.value = ""
             files = data.get("files", [])
             if not files:
@@ -1439,7 +1271,7 @@ def drive_page(page: ft.Page):
         page.update()
 
         def do_work():
-            data = _run_qesg("qesg doc list --sort modifiedTime --limit 20")
+            data = google_api.drive_recent(20)
             status.value = ""
             files = data.get("files", [])
             if not files:
@@ -1506,7 +1338,7 @@ def sheets_page(page: ft.Page):
         page.update()
 
         def do_work():
-            data = _run_qesg(f'qesg data read {sid_tf.value} --range "{range_tf.value}"')
+            data = google_api.sheets_read(sid_tf.value, range_tf.value)
             status.value = ""
             sheet_data = data.get("data")
             if sheet_data:
@@ -1546,7 +1378,7 @@ def sheets_page(page: ft.Page):
         page.update()
 
         def do_work():
-            data = _run_qesg(f'qesg data search --query "{search_tf.value}"')
+            data = google_api.sheets_search(search_tf.value)
             status.value = ""
             sheets = data.get("spreadsheets", [])
             if not sheets:

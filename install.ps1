@@ -34,42 +34,9 @@ function Test-Winget {
 
 # ── 1. Prerequisites — Auto-Install if Missing ──────────────
 
-Write-Host "[1/5] 사전 요구사항 확인 및 설치 중..." -ForegroundColor Yellow
+Write-Host "[1/4] 사전 요구사항 확인 및 설치 중..." -ForegroundColor Yellow
 
 $hasWinget = Test-Winget
-
-# --- Node.js ---
-$needNode = $false
-if (!(Get-Command node -ErrorAction SilentlyContinue)) {
-    $needNode = $true
-    Write-Host "  [X] Node.js 미설치 — 자동 설치 시도..." -ForegroundColor Yellow
-
-    if ($hasWinget) {
-        Write-Host "      winget으로 Node.js LTS 설치 중..." -ForegroundColor Gray
-        winget install OpenJS.NodeJS.LTS --accept-source-agreements --accept-package-agreements --silent 2>&1 | Out-Null
-        Refresh-Path
-        # Also add default Node.js path
-        $nodePaths = @(
-            "${env:ProgramFiles}\nodejs",
-            "${env:ProgramFiles(x86)}\nodejs"
-        )
-        foreach ($p in $nodePaths) {
-            if ((Test-Path $p) -and ($env:Path -notlike "*$p*")) {
-                $env:Path = "$p;$env:Path"
-            }
-        }
-    }
-
-    # Verify
-    if (Get-Command node -ErrorAction SilentlyContinue) {
-        Write-Host "  [OK] Node.js $(node --version) 설치 완료!" -ForegroundColor Green
-        $needNode = $false
-    } else {
-        Write-Host "  [!] Node.js 자동 설치 실패" -ForegroundColor Red
-    }
-} else {
-    Write-Host "  [OK] Node.js $(node --version)" -ForegroundColor Green
-}
 
 # --- Python ---
 $needPython = $false
@@ -107,19 +74,13 @@ if (!(Get-Command python -ErrorAction SilentlyContinue)) {
 }
 
 # If still missing, fall back to manual instructions
-if ($needNode -or $needPython) {
+if ($needPython) {
     Write-Host ""
     Write-Host "  ── 자동 설치 실패: 수동 설치가 필요합니다 ──" -ForegroundColor Red
     Write-Host ""
-    if ($needNode) {
-        Write-Host "  1. Node.js: https://nodejs.org 에서 LTS 다운로드 → 설치" -ForegroundColor Yellow
-        Start-Process "https://nodejs.org"
-    }
-    if ($needPython) {
-        Write-Host "  2. Python: https://www.python.org/downloads/ 에서 다운로드 → 설치" -ForegroundColor Yellow
-        Write-Host "     (중요!) 설치 화면 하단 'Add Python to PATH' 반드시 체크!" -ForegroundColor White
-        Start-Process "https://www.python.org/downloads/"
-    }
+    Write-Host "  Python: https://www.python.org/downloads/ 에서 다운로드 → 설치" -ForegroundColor Yellow
+    Write-Host "     (중요!) 설치 화면 하단 'Add Python to PATH' 반드시 체크!" -ForegroundColor White
+    Start-Process "https://www.python.org/downloads/"
     Write-Host ""
     Write-Host "  설치 완료 후 install.bat를 다시 실행하세요." -ForegroundColor Cyan
     Read-Host "  엔터를 누르면 종료합니다"
@@ -162,38 +123,21 @@ if (Get-Command git -ErrorAction SilentlyContinue) {
 # ── 2. Install Dependencies ─────────────────────────────────
 
 Write-Host ""
-Write-Host "[2/5] 패키지 설치 중..." -ForegroundColor Yellow
+Write-Host "[2/4] 패키지 설치 중..." -ForegroundColor Yellow
 
 # Ensure pip is up to date
 Write-Host "  pip 업데이트 중..." -ForegroundColor Gray
 $null = cmd /c "python -m pip install --upgrade pip 2>&1"
 
-# gws CLI
-Write-Host "  gws CLI 설치 중..." -ForegroundColor Gray
-$null = cmd /c "npm install -g @googleworkspace/cli 2>&1"
-$npmGlobal = Join-Path $env:APPDATA "npm"
-if ($env:Path -notlike "*$npmGlobal*") {
-    $env:Path = "$npmGlobal;$env:Path"
-}
-if ((Get-Command gws -ErrorAction SilentlyContinue) -or (Test-Path (Join-Path $npmGlobal "gws.cmd"))) {
-    Write-Host "  [OK] gws CLI" -ForegroundColor Green
-} else {
-    Write-Host "  [!] gws 설치 실패. 'npm install -g @googleworkspace/cli' 수동 실행 필요" -ForegroundColor Red
-}
-
-# qesg + flet + llm dependencies
-Write-Host "  qesg + AI 패키지 설치 중 (1-2분 소요)..." -ForegroundColor Gray
+# qesg + flet + Google API + LLM dependencies
+Write-Host "  diding + AI 패키지 설치 중 (1-2분 소요)..." -ForegroundColor Gray
 $null = cmd /c "pip install -e `"$scriptDir[llm]`" 2>&1"
-if (Get-Command qesg -ErrorAction SilentlyContinue) {
-    Write-Host "  [OK] qesg CLI" -ForegroundColor Green
-} else {
-    Write-Host "  [OK] qesg 설치됨 (PATH 재시작 후 활성화)" -ForegroundColor Green
-}
+Write-Host "  [OK] diding 패키지 설치 완료" -ForegroundColor Green
 
 # ── 3. Create Launcher Script ───────────────────────────────
 
 Write-Host ""
-Write-Host "[3/5] 런처 생성 중..." -ForegroundColor Yellow
+Write-Host "[3/4] 런처 생성 중..." -ForegroundColor Yellow
 
 $launcherPath = Join-Path $scriptDir "diding.bat"
 $launcherContent = @"
@@ -207,7 +151,7 @@ Write-Host "  [OK] diding.bat 생성" -ForegroundColor Green
 # ── 4. Create Desktop Shortcut ──────────────────────────────
 
 Write-Host ""
-Write-Host "[4/5] 바탕화면 바로가기 생성 중..." -ForegroundColor Yellow
+Write-Host "[4/4] 바탕화면 바로가기 생성 중..." -ForegroundColor Yellow
 
 $desktopPath = [System.Environment]::GetFolderPath("Desktop")
 $shortcutPath = Join-Path $desktopPath "diding.lnk"

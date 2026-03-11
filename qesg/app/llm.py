@@ -1,32 +1,31 @@
 """Multi-provider LLM client — Gemini, Claude, OpenAI."""
 import json
-import subprocess
-import os
+from qesg.core import google_api
 
-# System prompt that teaches the LLM how to use qesg CLI
-SYSTEM_PROMPT = """당신은 diding 업무 확인 비서입니다. 사용자의 요청을 처리하기 위해 qesg CLI 도구를 사용합니다.
+# System prompt that teaches the LLM how to use Google API functions
+SYSTEM_PROMPT = """당신은 diding 업무 확인 비서입니다. 사용자의 요청을 처리하기 위해 Google API 도구를 사용합니다.
 이 앱은 읽기 전용 모드입니다. 메일 발송, 일정 추가 등 쓰기 작업은 할 수 없습니다.
 
 ## 사용 가능한 도구 (읽기 전용)
-- `qesg mail triage --limit N` — 읽지 않은 메일 요약
-- `qesg mail read <id>` — 메일 본문 읽기
-- `qesg mail chat --with "이름" --topic "주제"` — 특정인과 대화이력 조회
-- `qesg schedule agenda` — 오늘 일정 확인
-- `qesg schedule deadlines --days N` — 마감 데드라인 확인
-- `qesg doc search "검색어"` — Drive 검색
-- `qesg data read <id> --range "범위"` — 시트 읽기
+- `gmail_triage(limit)` — 읽지 않은 메일 요약
+- `gmail_read(message_id)` — 메일 본문 읽기
+- `gmail_search(query, limit)` — 메일 검색
+- `gmail_chat_history(name, limit)` — 특정인과 대화이력 조회
+- `calendar_agenda(days)` — N일간 일정 확인
+- `drive_search(query, limit)` — Drive 검색
+- `drive_list(file_type, limit)` — Drive 파일 목록
+- `sheets_read(spreadsheet_id, range_name)` — 시트 읽기
 
 ## 규칙
-1. 사용자 요청을 분석해서 적절한 qesg 명령어를 실행하세요.
-2. 명령어를 실행하려면 [EXEC] 태그를 사용하세요: [EXEC]qesg mail triage --limit 5[/EXEC]
-3. 읽기 전용 모드이므로 reply, send, add 등 쓰기 명령어는 절대 실행하지 마세요.
-4. 사용자가 메일 발송이나 일정 추가를 요청하면, "읽기 전용 모드입니다"라고 안내하세요.
-5. 결과를 한국어로 읽기 쉽게 요약해서 알려주세요.
-6. JSON 원문을 그대로 보여주지 말고, 핵심만 정리하세요.
+1. 사용자 요청을 분석해서 적절한 도구를 실행하세요.
+2. 도구를 실행하려면 [EXEC] 태그를 사용하세요: [EXEC]gmail_triage(5)[/EXEC]
+3. 읽기 전용 모드이므로 reply, send, add 등 쓰기 요청은 "읽기 전용 모드입니다"라고 안내하세요.
+4. 결과를 한국어로 읽기 쉽게 요약해서 알려주세요.
+5. JSON 원문을 그대로 보여주지 말고, 핵심만 정리하세요.
 
 ## 메일 초안 참고
 사용자가 메일 초안을 요청하면:
-1. 먼저 `qesg mail chat --with "이름"` 으로 대화이력을 조회하세요.
+1. 먼저 `gmail_chat_history("이름")` 으로 대화이력을 조회하세요.
 2. 초안을 작성해서 보여줄 수 있지만, 실제 발송은 불가합니다.
 3. "초안을 참고하세요. 실제 발송은 Gmail에서 직접 해주세요." 라고 안내하세요.
 
@@ -37,34 +36,91 @@ SYSTEM_PROMPT = """당신은 diding 업무 확인 비서입니다. 사용자의 
 - 긴급도/중요도 순으로 정렬
 """
 
-# 쓰기 명령어 차단 목록
-_WRITE_COMMANDS = ["mail reply", "mail send", "mail forward", "schedule add", "doc upload", "data append"]
+# Available API functions mapping
+_API_FUNCTIONS = {
+    "gmail_triage": lambda args: google_api.gmail_triage(**args),
+    "gmail_read": lambda args: google_api.gmail_read(**args),
+    "gmail_search": lambda args: google_api.gmail_search(**args),
+    "gmail_chat_history": lambda args: google_api.gmail_chat_history(**args),
+    "calendar_agenda": lambda args: google_api.calendar_agenda(**args),
+    "drive_search": lambda args: google_api.drive_search(**args),
+    "drive_list": lambda args: google_api.drive_list(**args),
+    "drive_recent": lambda args: google_api.drive_recent(**args),
+    "sheets_read": lambda args: google_api.sheets_read(**args),
+    "sheets_search": lambda args: google_api.sheets_search(**args),
+}
+
+# Write commands to block
+_WRITE_KEYWORDS = ["reply", "send", "forward", "add", "upload", "append", "delete", "remove", "create"]
 
 
-def _run_qesg(cmd: str) -> str:
-    """Execute a qesg CLI command and return output."""
+def _parse_function_call(expr: str) -> tuple[str, dict]:
+    """Parse a function call like 'gmail_triage(5)' or 'gmail_search("query", 10)'.
+    Returns (func_name, kwargs_dict)."""
+    expr = expr.strip()
+    paren_idx = expr.find("(")
+    if paren_idx == -1:
+        return expr, {}
+
+    func_name = expr[:paren_idx].strip()
+    args_str = expr[paren_idx + 1:expr.rfind(")")].strip()
+
+    if not args_str:
+        return func_name, {}
+
+    # Try to parse as JSON array for positional args
     try:
-        result = subprocess.run(
-            cmd, shell=True, capture_output=True, text=True,
-            timeout=30, encoding="utf-8",
-            env={**os.environ,
-                 "PATH": os.path.join(os.environ.get("APPDATA", ""), "npm") + ";" +
-                         r"C:\Program Files\nodejs;" + os.environ.get("PATH", "")},
-        )
-        return result.stdout.strip() or result.stderr.strip()
+        args_list = json.loads(f"[{args_str}]")
+    except json.JSONDecodeError:
+        # Fallback: treat as single string arg
+        args_list = [args_str.strip("\"'")]
+
+    # Map positional args to function parameters
+    param_map = {
+        "gmail_triage": ["limit"],
+        "gmail_read": ["message_id"],
+        "gmail_search": ["query", "limit"],
+        "gmail_chat_history": ["name", "limit"],
+        "calendar_agenda": ["days"],
+        "drive_search": ["query", "limit"],
+        "drive_list": ["file_type", "limit"],
+        "drive_recent": ["limit"],
+        "sheets_read": ["spreadsheet_id", "range_name"],
+        "sheets_search": ["query"],
+    }
+
+    params = param_map.get(func_name, [])
+    kwargs = {}
+    for i, val in enumerate(args_list):
+        if i < len(params):
+            kwargs[params[i]] = val
+
+    return func_name, kwargs
+
+
+def _run_api_call(expr: str) -> str:
+    """Execute a Google API function call and return result as string."""
+    try:
+        func_name, kwargs = _parse_function_call(expr)
+
+        if func_name not in _API_FUNCTIONS:
+            return f"Error: Unknown function '{func_name}'"
+
+        result = _API_FUNCTIONS[func_name](kwargs)
+        return json.dumps(result, ensure_ascii=False, indent=2)[:3000]
     except Exception as e:
         return f"Error: {e}"
 
 
 def _is_write_command(cmd: str) -> bool:
-    """쓰기 명령어인지 확인."""
+    """Check if command is a write operation."""
     cmd_lower = cmd.lower()
-    return any(w in cmd_lower for w in _WRITE_COMMANDS)
+    return any(w in cmd_lower for w in _WRITE_KEYWORDS)
 
 
 def _extract_and_run_commands(text: str) -> tuple[str, list[dict]]:
     """Extract [EXEC]...[/EXEC] commands, run them, return modified text + results.
-    쓰기 명령어는 차단합니다."""
+    Write commands are blocked."""
     results = []
     while "[EXEC]" in text and "[/EXEC]" in text:
         start = text.index("[EXEC]")
@@ -75,7 +131,7 @@ def _extract_and_run_commands(text: str) -> tuple[str, list[dict]]:
             text = text[:start] + f"\n⚠️ 읽기 전용 모드: `{cmd}` 실행이 차단되었습니다.\n" + text[end:]
             continue
 
-        output = _run_qesg(cmd)
+        output = _run_api_call(cmd)
         results.append({"command": cmd, "output": output})
         text = text[:start] + f"\n```\n{cmd}\n→ 실행 완료\n```\n" + text[end:]
     return text, results
@@ -166,7 +222,7 @@ class LLMClient:
         client = genai.Client(api_key=self.api_key)
 
         contents = [{"role": "user", "parts": [{"text": SYSTEM_PROMPT}]},
-                     {"role": "model", "parts": [{"text": "네, 업무 자동화 비서로서 qesg CLI를 활용하겠습니다."}]}]
+                     {"role": "model", "parts": [{"text": "네, 업무 확인 비서로서 Google API를 활용하겠습니다."}]}]
         for msg in self.history:
             role = "user" if msg["role"] == "user" else "model"
             contents.append({"role": role, "parts": [{"text": msg["content"]}]})
