@@ -1,33 +1,28 @@
-"""Document commands — Google Drive sync, search, version tracking via gws CLI."""
+"""Document commands — Google Drive via gws CLI."""
+import json as _json
 import click
 from qesg.core.output import emit, ok, dry_run_notice, error
-from qesg.core.gws import run_gws, build_json_arg
+from qesg.core.gws import run_gws
 
 
 @click.group()
 def doc():
-    """Google Drive document management — sync, search, upload."""
+    """Google Drive — search, list, upload."""
     pass
 
 
 @doc.command("list")
-@click.option("--folder", default=None, help="Drive folder name or ID.")
-@click.option("--query", "search_query", default=None, help="Search query string.")
+@click.option("--query", "search_query", default=None, help="Drive search query.")
 @click.option("--type", "file_type", type=click.Choice(["doc", "sheet", "slide", "pdf", "any"]),
-              default="any", help="File type filter.")
+              default="any")
 @click.option("--limit", default=20)
-def doc_list(folder, search_query, file_type, limit):
+def doc_list(search_query, file_type, limit):
     """List files in Drive.
 
     Examples:
-        qesg doc list --folder "프로젝트 문서"
-        qesg doc list --query "etl-enhancement" --type doc
+        qesg doc list --query "보고서" --type doc
     """
-    args = ["drive", "files", "list"]
-
     query_parts = []
-    if folder:
-        query_parts.append(f"'{folder}' in parents")
     if search_query:
         query_parts.append(f"name contains '{search_query}'")
     if file_type != "any":
@@ -39,93 +34,53 @@ def doc_list(folder, search_query, file_type, limit):
         }
         query_parts.append(f"mimeType='{mime_map[file_type]}'")
 
+    params = {"pageSize": limit}
     if query_parts:
-        args += ["--query", " and ".join(query_parts)]
-    args += ["--max-results", str(limit)]
+        params["q"] = " and ".join(query_parts)
 
-    result = run_gws(args)
+    result = run_gws(["drive", "files", "list", "--params", _json.dumps(params)])
     if result.get("error"):
         error(result["message"], code=result.get("code", "GWS_ERROR"))
 
-    emit({"status": "ok", "files": result.get("data") or []})
-
-
-@doc.command("get")
-@click.argument("file_id")
-def doc_get(file_id):
-    """Get file metadata and content."""
-    result = run_gws(["drive", "files", "get", file_id])
-    if result.get("error"):
-        error(result["message"], code=result.get("code", "GWS_ERROR"))
-
-    emit({"status": "ok", "file": result["data"]})
+    emit({"status": "ok", "files": result.get("data")})
 
 
 @doc.command("search")
 @click.argument("query")
 @click.option("--limit", default=10)
 def doc_search(query, limit):
-    """Search Drive by filename or content.
+    """Search Drive by name or content.
 
     Examples:
-        qesg doc search "etl-enhancement-proposal-v2"
-        qesg doc search "납품 일정"
+        qesg doc search "etl-enhancement"
     """
-    result = run_gws(["drive", "files", "list", "--query", f"fullText contains '{query}'",
-                       "--max-results", str(limit)])
+    params = {"q": f"fullText contains '{query}'", "pageSize": limit}
+    result = run_gws(["drive", "files", "list", "--params", _json.dumps(params)])
     if result.get("error"):
         error(result["message"], code=result.get("code", "GWS_ERROR"))
 
-    emit({"status": "ok", "query": query, "files": result.get("data") or []})
+    emit({"status": "ok", "query": query, "files": result.get("data")})
 
 
-@doc.command("sync")
-@click.option("--local", required=True, help="Local file path to sync.")
-@click.option("--drive-path", default=None, help="Target Drive folder.")
-@click.option("--mode", type=click.Choice(["upload", "download", "both"]), default="upload")
+@doc.command("upload")
+@click.option("--file", "local_file", required=True, help="Local file path.")
 @click.option("--dry-run", is_flag=True)
-def doc_sync(local, drive_path, mode, dry_run):
-    """Sync a local file to/from Google Drive.
+def doc_upload(local_file, dry_run):
+    """Upload a file to Drive.
 
     Examples:
-        qesg doc sync --local ./etl-enhancement-proposal-v2.md --drive-path "프로젝트 문서"
-        qesg doc sync --local ./report.md --mode download --dry-run
+        qesg doc upload --file ./report.md --dry-run
     """
+    args = ["drive", "+upload", "--file", local_file]
     if dry_run:
-        dry_run_notice("doc.sync", {
-            "local": local,
-            "drive_path": drive_path,
-            "mode": mode,
-        })
-        return
+        args.append("--dry-run")
 
-    if mode in ("upload", "both"):
-        args = ["drive", "files", "upload", "--file", local]
-        if drive_path:
-            args += ["--parent", drive_path]
-        result = run_gws(args)
-        if result.get("error"):
-            error(result["message"], code=result.get("code", "GWS_ERROR"))
-
-    if mode in ("download", "both"):
-        # For download, we'd need file ID — search first
-        result = run_gws(["drive", "files", "list", "--query", f"name contains '{local}'"])
-        if result.get("error"):
-            error(result["message"], code=result.get("code", "GWS_ERROR"))
-
-    ok(f"Sync completed: {local} ({mode})")
-
-
-@doc.command("version")
-@click.argument("file_id")
-def doc_version(file_id):
-    """Check file revision history.
-
-    Examples:
-        qesg doc version abc123
-    """
-    result = run_gws(["drive", "revisions", "list", file_id])
+    result = run_gws(args)
     if result.get("error"):
         error(result["message"], code=result.get("code", "GWS_ERROR"))
 
-    emit({"status": "ok", "file_id": file_id, "revisions": result.get("data") or []})
+    if dry_run:
+        emit({"status": "dry_run", "action": "doc.upload",
+              "file": local_file, "preview": result.get("data")})
+    else:
+        ok(f"Uploaded: {local_file}", data=result.get("data"))
